@@ -128,7 +128,6 @@ def _handle_turn_verbose(agent, message: str) -> None:
             response_text = payload
 
     if response_text:
-        console.print()
         console.print("[bold blue]Agent:[/bold blue]", Markdown(response_text))
     else:
         console.print("  [dim](no response)[/dim]")
@@ -159,7 +158,6 @@ def _handle_turn_debug(agent, message: str) -> None:
             response_text = payload
 
     if response_text:
-        console.print()
         console.print("[bold blue]Agent:[/bold blue]", Markdown(response_text))
     else:
         console.print("  [dim](no response)[/dim]")
@@ -208,7 +206,6 @@ def chat(ctx):
             console.print("Goodbye!")
             break
 
-        console.print()
         try:
             if verbosity >= VERBOSITY_DEBUG:
                 _handle_turn_debug(agent, stripped)
@@ -216,13 +213,10 @@ def chat(ctx):
                 _handle_turn_verbose(agent, stripped)
             else:
                 response = _handle_turn_info(agent, stripped)
-                console.print()
                 console.print("[bold blue]Agent:[/bold blue]", Markdown(response))
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
             continue
-
-        console.print()
 
 
 @cli.command()

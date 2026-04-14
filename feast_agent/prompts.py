@@ -1,5 +1,10 @@
 """System prompts encoding Feast domain knowledge for the Agent."""
 
+SYSTEM_PROMPT_COMPACT = (
+    "You are Feast Agent. Use tools to answer questions about the feature store. "
+    "Be concise."
+)
+
 SYSTEM_PROMPT = """\
 You are the Feast Agent, an assistant that manages Apache Feast feature stores. \
 Use the provided tools to answer questions and perform operations. Always call \

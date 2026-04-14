@@ -9,24 +9,30 @@ from langchain_core.tools import tool
 from feast import FeatureStore
 
 
+def _extract_name(kwargs: dict) -> str:
+    """Pull a name string from whatever the LLM passed.
+
+    Accepts ``name``, ``feature_view_name``, ``feature_view_names``,
+    ``entity_name``, ``data_source_name``, etc.  If the value is a list,
+    takes the first element.
+    """
+    for key in ("name", "feature_view_name", "feature_view_names",
+                "entity_name", "data_source_name", "source_name"):
+        val = kwargs.get(key)
+        if val is not None:
+            if isinstance(val, list):
+                return str(val[0]) if val else ""
+            return str(val)
+    return ""
+
+
 def get_inspect_tools(store: FeatureStore) -> list:
     """Return all inspection tools bound to *store*."""
 
     @tool
     def list_all_objects() -> Dict[str, Any]:
-        """List every registered Feast object with full detail.
-
-        Returns:
-        - data_sources: names
-        - entities: names
-        - feature_views: each with its individual features (schema fields)
-        - on_demand_feature_views: each with its features
-        - stream_feature_views: each with its features
-        - feature_services: each with the feature views and features it includes
-
-        IMPORTANT: A "feature view" is a container. The individual "features"
-        are the schema fields inside it (e.g. conv_rate, acc_rate).
-        """
+        """List every registered Feast object: data sources, entities,
+        feature views (with individual features), and feature services."""
         data_sources = store.list_data_sources()
         entities = store.list_entities()
         feature_views = store.list_feature_views()
@@ -38,7 +44,15 @@ def get_inspect_tools(store: FeatureStore) -> list:
             features = []
             if hasattr(fv, "schema"):
                 features = [{"name": f.name, "dtype": str(f.dtype)} for f in fv.schema]
-            return {"name": fv.name, "type": type(fv).__name__, "features": features}
+            info: Dict[str, Any] = {"name": fv.name, "type": type(fv).__name__, "features": features}
+            sfvp = getattr(fv, "source_feature_view_projections", None)
+            if sfvp:
+                info["sources"] = list(sfvp.keys()) if isinstance(sfvp, dict) else [p.name for p in sfvp]
+            if hasattr(fv, "udf_string") and fv.udf_string:
+                info["transformation"] = fv.udf_string.strip()
+            if hasattr(fv, "mode"):
+                info["mode"] = str(fv.mode)
+            return info
 
         def _fs_info(fs) -> Dict[str, Any]:
             projections = []
@@ -88,10 +102,16 @@ def get_inspect_tools(store: FeatureStore) -> list:
         }
 
     @tool
-    def describe_feature_view(name: str) -> Dict[str, Any]:
-        """Describe a feature view in detail: its source, entities, schema (fields),
-        TTL, online/offline flags, and tags. Works for standard, batch, stream,
-        and on-demand feature views."""
+    def describe_feature_view(name: str = "", **kwargs: Any) -> Dict[str, Any]:
+        """Describe a feature view: schema, source, entities, TTL, tags,
+        and transformation code. Works for all view types.
+
+        Args:
+            name: Name of the feature view to describe.
+        """
+        name = name or _extract_name(kwargs)
+        if not name:
+            return {"error": "Please provide the feature view name."}
         try:
             fv = store.get_feature_view(name)
         except Exception:
@@ -125,13 +145,26 @@ def get_inspect_tools(store: FeatureStore) -> list:
             info["source"] = fv.source.name
         if hasattr(fv, "stream_source") and fv.stream_source:
             info["stream_source"] = fv.stream_source.name
+        sfvp = getattr(fv, "source_feature_view_projections", None)
+        if sfvp:
+            info["input_feature_views"] = list(sfvp.keys()) if isinstance(sfvp, dict) else [p.name for p in sfvp]
+        if hasattr(fv, "udf_string") and fv.udf_string:
+            info["transformation_code"] = fv.udf_string.strip()
+        if hasattr(fv, "mode"):
+            info["mode"] = str(fv.mode)
 
         return info
 
     @tool
-    def describe_data_source(name: str) -> Dict[str, Any]:
-        """Describe a data source in detail: its type, path/table, timestamp
-        field, and field mappings."""
+    def describe_data_source(name: str = "", **kwargs: Any) -> Dict[str, Any]:
+        """Describe a data source: type, path/table, timestamp field, mappings.
+
+        Args:
+            name: Name of the data source to describe.
+        """
+        name = name or _extract_name(kwargs)
+        if not name:
+            return {"error": "Please provide the data source name."}
         try:
             ds = store.get_data_source(name)
         except Exception:
@@ -153,8 +186,15 @@ def get_inspect_tools(store: FeatureStore) -> list:
         return info
 
     @tool
-    def describe_entity(name: str) -> Dict[str, Any]:
-        """Describe an entity: its join keys, value type, description, and tags."""
+    def describe_entity(name: str = "", **kwargs: Any) -> Dict[str, Any]:
+        """Describe an entity: join key, value type, description, and tags.
+
+        Args:
+            name: Name of the entity to describe.
+        """
+        name = name or _extract_name(kwargs)
+        if not name:
+            return {"error": "Please provide the entity name."}
         try:
             entity = store.get_entity(name)
         except Exception:
@@ -162,7 +202,7 @@ def get_inspect_tools(store: FeatureStore) -> list:
 
         return {
             "name": entity.name,
-            "join_keys": list(entity.join_keys) if entity.join_keys else [entity.join_key],
+            "join_key": entity.join_key,
             "value_type": str(entity.value_type),
             "description": entity.description,
             "tags": dict(getattr(entity, "tags", {})),

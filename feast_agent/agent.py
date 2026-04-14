@@ -8,12 +8,11 @@ from typing import Any, Dict, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-warnings.filterwarnings("ignore", message="create_react_agent", category=DeprecationWarning)
 from langgraph.prebuilt import create_react_agent  # noqa: E402
 
 from feast_agent.config import AgentConfig
-from feast_agent.prompts import SYSTEM_PROMPT
-from feast_agent.tools import get_all_tools
+from feast_agent.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_COMPACT
+from feast_agent.tools import get_all_tools, get_core_tools
 
 
 def create_agent(
@@ -37,15 +36,23 @@ def create_agent(
 
     store = config.build_feature_store()
     llm = config.build_chat_model()
-    tools = get_all_tools(store)
+
+    is_small_model = config.llm_provider.lower() == "ollama"
+    tools = get_core_tools(store) if is_small_model else get_all_tools(store)
+    prompt = SYSTEM_PROMPT_COMPACT if is_small_model else SYSTEM_PROMPT
+
     checkpointer = MemorySaver()
 
-    graph = create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=SYSTEM_PROMPT,
-        checkpointer=checkpointer,
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        graph = create_react_agent(
+            model=llm,
+            tools=tools,
+            prompt=prompt,
+            checkpointer=checkpointer,
+        )
+
+    MAX_STEPS = 10
 
     class FeastAgent:
         """Thin wrapper providing a simple invoke(message) -> response API."""
@@ -55,11 +62,17 @@ def create_agent(
             self.thread_id = thread_id
             self.store = store
 
+        def _config(self) -> dict:
+            return {
+                "configurable": {"thread_id": self.thread_id},
+                "recursion_limit": MAX_STEPS,
+            }
+
         def invoke(self, message: str) -> str:
             """Send a message and return the agent's text response."""
             result = self.graph.invoke(
                 {"messages": [HumanMessage(content=message)]},
-                config={"configurable": {"thread_id": self.thread_id}},
+                config=self._config(),
             )
             messages = result.get("messages", [])
             for msg in reversed(messages):
@@ -71,7 +84,7 @@ def create_agent(
             """Async version of invoke."""
             result = await self.graph.ainvoke(
                 {"messages": [HumanMessage(content=message)]},
-                config={"configurable": {"thread_id": self.thread_id}},
+                config=self._config(),
             )
             messages = result.get("messages", [])
             for msg in reversed(messages):
@@ -94,7 +107,7 @@ def create_agent(
 
             for chunk in self.graph.stream(
                 {"messages": [HumanMessage(content=message)]},
-                config={"configurable": {"thread_id": self.thread_id}},
+                config=self._config(),
             ):
                 for node_name, node_output in chunk.items():
                     msgs = node_output.get("messages", [])

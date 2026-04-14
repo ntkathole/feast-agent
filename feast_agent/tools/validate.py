@@ -138,18 +138,56 @@ def get_validate_tools(store: FeatureStore) -> list:
     @tool
     def check_feature_consistency(
         feature_view_name: str,
-        features: List[str],
-        entity_rows: List[Dict[str, Any]],
+        features: Any = None,
+        entity_rows: Any = None,
     ) -> Dict[str, Any]:
-        """Compare offline (historical) vs online feature values for a set of
-        entity rows to verify consistency.
+        """Compare offline vs online feature values to verify consistency.
 
         Args:
-            feature_view_name: Name of the feature view.
-            features: Feature references like ["feature_view:feature_name"].
-            entity_rows: Entity key-value dicts for lookup.
+            feature_view_name: Name of the feature view, e.g. "driver_hourly_stats".
+            features: Feature refs like ["driver_hourly_stats:conv_rate"].
+                If omitted, all features from the view are used.
+            entity_rows: List of entity dicts, e.g. [{"driver_id": 1001}].
+                If omitted, a default sample row is generated.
         """
+        import json as _json
         import pandas as pd
+
+        if isinstance(entity_rows, str):
+            try:
+                entity_rows = _json.loads(entity_rows)
+            except _json.JSONDecodeError:
+                import ast
+                try:
+                    entity_rows = ast.literal_eval(entity_rows)
+                except Exception:
+                    return {"error": f"Could not parse entity_rows string: {entity_rows!r}"}
+
+        try:
+            fv = store.get_feature_view(feature_view_name)
+        except Exception:
+            return {"error": f"Feature view '{feature_view_name}' not found."}
+
+        if not features:
+            features = [
+                f"{feature_view_name}:{f.name}"
+                for f in fv.schema
+                if f.name not in {e for e in fv.entities}
+            ]
+        elif isinstance(features, list):
+            features = [
+                f"{feature_view_name}:{f}" if ":" not in f else f
+                for f in features
+            ]
+
+        if not entity_rows:
+            entity_keys = [e for e in fv.entities if e != "__dummy"]
+            if entity_keys:
+                entity_rows = [{k: 1 for k in entity_keys}]
+            else:
+                return {"error": "Cannot determine entity keys; provide entity_rows explicitly."}
+        if not isinstance(entity_rows, list):
+            entity_rows = [entity_rows]
 
         try:
             online_resp = store.get_online_features(

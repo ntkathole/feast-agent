@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from langchain_core.tools import tool
 
@@ -69,9 +69,9 @@ def get_auth_tools(store: FeatureStore) -> list:
         for perm in permissions:
             entry: Dict[str, Any] = {
                 "name": perm.name,
-                "types": [t.__name__ for t in perm.types] if hasattr(perm, "types") else [],
-                "actions": [a.value for a in perm.actions] if hasattr(perm, "actions") else [],
-                "tags": dict(getattr(perm, "tags", {})),
+                "types": [t.__name__ for t in perm.types] if getattr(perm, "types", None) else [],
+                "actions": [a.value for a in perm.actions] if getattr(perm, "actions", None) else [],
+                "tags": dict(getattr(perm, "tags", None) or {}),
             }
 
             if hasattr(perm, "name_patterns") and perm.name_patterns:
@@ -106,15 +106,15 @@ def get_auth_tools(store: FeatureStore) -> list:
 
         info: Dict[str, Any] = {
             "name": perm.name,
-            "types": [t.__name__ for t in perm.types] if hasattr(perm, "types") else [],
-            "actions": [a.value for a in perm.actions] if hasattr(perm, "actions") else [],
-            "tags": dict(getattr(perm, "tags", {})),
+            "types": [t.__name__ for t in perm.types] if getattr(perm, "types", None) else [],
+            "actions": [a.value for a in perm.actions] if getattr(perm, "actions", None) else [],
+            "tags": dict(getattr(perm, "tags", None) or {}),
         }
 
         if hasattr(perm, "name_patterns") and perm.name_patterns:
             info["name_patterns"] = list(perm.name_patterns)
         if hasattr(perm, "required_tags") and perm.required_tags:
-            info["required_tags"] = dict(perm.required_tags)
+            info["required_tags"] = dict(getattr(perm, "required_tags", None) or {})
 
         if hasattr(perm, "policy"):
             policy = perm.policy
@@ -131,36 +131,53 @@ def get_auth_tools(store: FeatureStore) -> list:
 
     @tool
     def create_permission(
-        name: str,
         actions: List[str],
+        name: Optional[str] = None,
         resource_types: Optional[List[str]] = None,
         name_patterns: Optional[List[str]] = None,
-        roles: Optional[List[str]] = None,
-        groups: Optional[List[str]] = None,
+        roles: Optional[Any] = None,
+        groups: Optional[Any] = None,
         namespaces: Optional[List[str]] = None,
         tags: Optional[Dict[str, str]] = None,
     ) -> str:
         """Create and register an RBAC permission.
 
         Args:
-            name: Unique name for the permission.
-            actions: List of allowed actions. Valid values: CREATE, DESCRIBE,
-                UPDATE, DELETE, READ_ONLINE, READ_OFFLINE, WRITE_ONLINE,
-                WRITE_OFFLINE.
-            resource_types: Optional list of Feast object types this applies to.
-                Valid: FeatureView, OnDemandFeatureView, StreamFeatureView,
-                BatchFeatureView, Entity, DataSource, FeatureService.
-                If omitted, applies to all types.
-            name_patterns: Optional regex patterns — resource name must match
-                at least one.
-            roles: Roles that satisfy this permission (RoleBasedPolicy).
-            groups: Groups that satisfy this permission (GroupBasedPolicy).
-            namespaces: Namespaces that satisfy this permission.
-            tags: Optional metadata tags on the permission itself.
+            actions: List of action strings, e.g. ["READ_ONLINE"]. Valid:
+                CREATE, DESCRIBE, UPDATE, DELETE, READ_ONLINE, READ_OFFLINE,
+                WRITE_ONLINE, WRITE_OFFLINE.
+            name: Unique name for the permission. Auto-generated if omitted.
+            resource_types: Optional Feast types, e.g. ["FeatureView"].
+            name_patterns: Optional regex patterns for resource names.
+            roles: List of role name strings, e.g. ["analyst", "admin"].
+            groups: List of group name strings.
+            namespaces: List of namespace strings.
+            tags: Optional metadata tags.
         """
         from feast.permissions.action import AuthzedAction
         from feast.permissions.permission import Permission
         from feast.permissions.policy import AllowAll, RoleBasedPolicy
+
+        def _normalize_string_list(val: Any) -> List[str]:
+            """Accept str, list, or dict and always return a flat list of strings."""
+            if val is None:
+                return []
+            if isinstance(val, str):
+                return [val]
+            if isinstance(val, dict):
+                flat: List[str] = []
+                for v in val.values():
+                    if isinstance(v, list):
+                        flat.extend(str(x) for x in v)
+                    else:
+                        flat.append(str(v))
+                return flat
+            if isinstance(val, list):
+                return [str(x) for x in val]
+            return [str(val)]
+
+        role_list = _normalize_string_list(roles)
+        group_list = _normalize_string_list(groups)
 
         action_map = {a.name.lower(): a for a in AuthzedAction}
         resolved_actions = []
@@ -169,6 +186,11 @@ def get_auth_tools(store: FeatureStore) -> list:
             if key not in action_map:
                 return f"Error: Unknown action '{a}'. Valid: {sorted(action_map.keys())}"
             resolved_actions.append(action_map[key])
+
+        if not name:
+            action_slug = "_".join(a.name.lower() for a in resolved_actions)
+            role_slug = "_".join(role_list) if role_list else "all"
+            name = f"{role_slug}_{action_slug}"
 
         resolved_types = None
         if resource_types:
@@ -188,11 +210,11 @@ def get_auth_tools(store: FeatureStore) -> list:
                     return f"Error: Unknown resource type '{rt}'. Valid: {sorted(type_map.keys())}"
                 resolved_types.append(type_map[key])
 
-        if roles:
-            policy = RoleBasedPolicy(roles=roles)
-        elif groups:
+        if role_list:
+            policy = RoleBasedPolicy(roles=role_list)
+        elif group_list:
             from feast.permissions.policy import GroupBasedPolicy
-            policy = GroupBasedPolicy(groups=groups)
+            policy = GroupBasedPolicy(groups=group_list)
         elif namespaces:
             from feast.permissions.policy import NamespaceBasedPolicy
             policy = NamespaceBasedPolicy(namespaces=namespaces)
