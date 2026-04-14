@@ -2,6 +2,9 @@
 
 An LLM-powered Data Agent that manages [Feast](https://feast.dev/) feature stores through natural language — locally or against a **remote** Feast deployment with **RBAC**.
 
+<img width="1908" height="901" alt="feast-agent" src="https://github.com/user-attachments/assets/7bf7fbfc-9302-4466-8ad3-807e18a4ca1f" />
+
+
 ## What It Does
 
 The Data Agent wraps the Feast Python SDK as LangChain tools and orchestrates them via a LangGraph ReAct agent. You describe what you want in plain English, and the agent handles the Feast API calls:
